@@ -135,7 +135,7 @@ class Container implements ContainerInterface
     /**
      * @return Container
      */
-    public static function create()
+    public static function getInstance()
     {
         if (! (self::$container instanceof self)) {
             self::$container = new self();

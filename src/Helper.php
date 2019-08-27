@@ -18,7 +18,7 @@ if (!function_exists('target')) {
      */
     function target(string $abstract, array $parameters = [])
     {
-        return Container::create()->make($abstract, $parameters);
+        return Container::getInstance()->make($abstract, $parameters);
     }
 }
 
@@ -37,7 +37,7 @@ if (!function_exists('injection')) {
      */
     function injection(string $abstract, $concrete = null, $shared = false)
     {
-        Container::create()->bind($abstract, $concrete, $shared);
+        Container::getInstance()->bind($abstract, $concrete, $shared);
     }
 }
 
@@ -56,6 +56,6 @@ if (!function_exists('injection_share')) {
      */
     function injection_share(string $abstract, $concrete = null)
     {
-        Container::create()->bind($abstract, $concrete, true);
+        Container::getInstance()->bind($abstract, $concrete, true);
     }
 }
