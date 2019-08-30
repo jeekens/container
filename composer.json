@@ -11,10 +11,10 @@
   "description": "jeekens container component",
   "license": "Apache-2.0",
   "require": {
-    "php": ">7.2",
+    "php": "~7.2.0",
     "ext-bcmath": "*",
     "psr/container": "^1.0",
-    "jeekens/basics": "~1.2.0"
+    "jeekens/std": "~1.2.0"
   },
   "autoload": {
     "psr-4": {
