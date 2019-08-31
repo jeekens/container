@@ -8,6 +8,22 @@ use Psr\Container\ContainerInterface as BaseContainerInterface;
 
 interface ContainerInterface extends BaseContainerInterface
 {
+
+    /**
+     * 原型
+     */
+    const SHARED_PROTOTYPE = 0;
+
+    /**
+     * 全局单例
+     */
+    const SHARED_SINGLETON = 1;
+
+    /**
+     * 请求级别单例
+     */
+    const SHARED_REQUEST = 2;
+
     /**
      * 判断是否绑定了指定的服务抽象类型
      *
@@ -34,25 +50,25 @@ interface ContainerInterface extends BaseContainerInterface
      *
      * @param  string  $abstract
      * @param  \Closure|string|null  $concrete
-     * @param  bool  $shared
+     * @param  int  $shared
      *
      * @return void
      */
-    public function bind(string $abstract, $concrete = null, $shared = false);
+    public function bind(string $abstract, $concrete = null, int $shared = self::SHARED_PROTOTYPE);
 
     /**
      * 当一个服务不存在时则，注册一个服务到容器
      *
      * @param  string  $abstract
      * @param  \Closure|string|null  $concrete
-     * @param  bool  $shared
+     * @param  int $shared
      *
      * @return void
      */
-    public function bindIf($abstract, $concrete = null, $shared = false);
+    public function bindIf($abstract, $concrete = null, int $shared = self::SHARED_PROTOTYPE);
 
     /**
-     * 注册一个共享服务
+     * 注册一个单例服务
      *
      * @param  string  $abstract
      * @param  \Closure|string|null  $concrete
@@ -60,6 +76,16 @@ interface ContainerInterface extends BaseContainerInterface
      * @return void
      */
     public function singleton(string $abstract, $concrete = null);
+
+    /**
+     * 注册一个请求级别的单例服务
+     *
+     * @param string $abstract
+     * @param null $concrete
+     *
+     * @return mixed
+     */
+    public function requestSingleton(string $abstract, $concrete = null);
 
     /**
      * 设置一个绑定上下文
@@ -93,11 +119,10 @@ interface ContainerInterface extends BaseContainerInterface
      *
      * @param  callable|string  $callback
      * @param  array  $parameters
-     * @param  string|null  $defaultMethod
      *
      * @return mixed
      */
-    public function call($callback, array $parameters = [], $defaultMethod = null);
+    public function call($callback, array $parameters = []);
 
     /**
      * 扩展容器中的抽象
@@ -126,26 +151,6 @@ interface ContainerInterface extends BaseContainerInterface
      * @return mixed
      */
     public function resolved($abstract);
-
-    /**
-     * 注册解析时执行的回调
-     *
-     * @param string $abstract
-     * @param Closure|null $callback
-     *
-     * @return mixed
-     */
-    public function resolving($abstract, Closure $callback = null);
-
-    /**
-     * 注册在首次解析抽象时解析操作之后执行的回调
-     *
-     * @param string $abstract
-     * @param Closure|null $callback
-     *
-     * @return mixed
-     */
-    public function afterResolving($abstract, Closure $callback = null);
 
     /**
      * 添加上下文绑定

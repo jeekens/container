@@ -10,9 +10,7 @@ use Jeekens\Container\Exception\NotInstantiableException;
 use LogicException;
 use ReflectionClass;
 use ReflectionParameter;
-use function array_merge;
 use function array_pop;
-use function call_user_func;
 use function compact;
 use function count;
 use function end;
@@ -27,16 +25,30 @@ class Container implements ContainerInterface
 {
 
     /**
-     * @var self
+     * @var static
      */
-    protected static $container;
+    protected static $_self;
 
     /**
-     * 服务实例
+     * 单例服务
      *
      * @var array
      */
     protected $instances = [];
+
+    /**
+     * 请求级别单例
+     *
+     * @var array
+     */
+    protected $requestInstances = [];
+
+    /**
+     * 服务原型
+     *
+     * @var array
+     */
+    protected $prototype = [];
 
     /**
      * 别名
@@ -72,13 +84,6 @@ class Container implements ContainerInterface
     protected $with = [];
 
     /**
-     * 已解析的抽象
-     *
-     * @var array
-     */
-    protected $resolved = [];
-
-    /**
      * 绑定上下文
      *
      * @var array
@@ -93,58 +98,6 @@ class Container implements ContainerInterface
     protected $extenders = [];
 
     /**
-     * @description 全局解析回调
-     *
-     * @var array
-     */
-    protected $globalResolvingCallbacks = [];
-
-    /**
-     * @var array
-     */
-    protected $reboundCallbacks = [];
-
-    /**
-     * 所有解析类型的回调
-     *
-     * @var array
-     */
-    protected $resolvingCallbacks = [];
-
-    /**
-     * 全局解析后置回调
-     *
-     * @var array
-     */
-    protected $globalAfterResolvingCallbacks = [];
-
-    /**
-     * 解析后置回调
-     *
-     * @var array
-     */
-    protected $afterResolvingCallbacks = [];
-
-    /**
-     * 方法绑定参数
-     *
-     * @var array
-     */
-    protected $methodBindings;
-
-    /**
-     * @return Container
-     */
-    public static function getInstance()
-    {
-        if (! (self::$container instanceof self)) {
-            self::$container = new self();
-        }
-
-        return self::$container;
-    }
-
-    /**
      * Container constructor.
      */
     private function __construct()
@@ -154,6 +107,18 @@ class Container implements ContainerInterface
 
     private function __clone()
     {
+    }
+
+    /**
+     * @return static
+     */
+    public static function getInstance()
+    {
+        if (!self::$_self) {
+            self::$_self = new self();
+        }
+
+        return self::$_self;
     }
 
     /**
@@ -216,7 +181,7 @@ class Container implements ContainerInterface
      */
     public function getAlias(string $abstract)
     {
-        if (! isset($this->aliases[$abstract])) {
+        if (!isset($this->aliases[$abstract])) {
             return $abstract;
         }
 
@@ -264,17 +229,43 @@ class Container implements ContainerInterface
     }
 
     /**
-     * 判断指定类型是否为共享类型(是否为单例)
+     * 判断指定类型是否为单例
      *
      * @param $abstract
      *
      * @return bool
      */
-    public function isShared($abstract)
+    public function isSingleton($abstract)
     {
         return isset($this->instances[$abstract]) ||
-            (isset($this->bindings[$abstract]['shared']) &&
-                $this->bindings[$abstract]['shared'] === true);
+                $this->bindings[$abstract]['shared'] === self::SHARED_SINGLETON ||
+                    $this->bindings[$abstract]['shared'] === self::SHARED_REQUEST;
+    }
+
+    /**
+     * 判断是否为请求级的单例
+     *
+     * @param $abstract
+     *
+     * @return bool
+     */
+    public function isRequestSingleton($abstract)
+    {
+        return isset($this->requestInstances[$abstract]) ||
+                    $this->bindings[$abstract]['shared'] === self::SHARED_REQUEST;
+    }
+
+    /**
+     * 判断是否为原型服务
+     *
+     * @param $abstract
+     *
+     * @return bool
+     */
+    public function isPrototype($abstract)
+    {
+        return isset($this->requestInstances[$abstract]) ||
+            $this->bindings[$abstract]['shared'] === self::SHARED_PROTOTYPE;
     }
 
     /**
@@ -289,41 +280,10 @@ class Container implements ContainerInterface
         if ($this->isAlias($abstract)) {
             $abstract = $this->getAlias($abstract);
         }
+
         return isset($this->resolved[$abstract]) ||
-            isset($this->instances[$abstract]);
-    }
-
-    /**
-     * 触发指定类型的回调
-     *
-     * @param $abstract
-     *
-     * @throws BindingResolutionException
-     * @throws EntryNotFoundException
-     * @throws NotInstantiableException
-     * @throws \ReflectionException
-     */
-    protected function rebound($abstract)
-    {
-        $instance = $this->make($abstract);
-        foreach ($this->getReboundCallbacks($abstract) as $callback) {
-            call_user_func($callback, $this, $instance);
-        }
-    }
-
-    /**
-     * 获取回调数组
-     *
-     * @param string $abstract
-     *
-     * @return array|mixed
-     */
-    protected function getReboundCallbacks($abstract)
-    {
-        if (isset($this->reboundCallbacks[$abstract])) {
-            return $this->reboundCallbacks[$abstract];
-        }
-        return [];
+            isset($this->instances[$abstract]) ||
+            isset($this->prototype[$abstract]);
     }
 
     /**
@@ -331,14 +291,14 @@ class Container implements ContainerInterface
      *
      * @param string $abstract
      * @param null $concrete
-     * @param bool $shared
+     * @param int $shared
      *
      * @throws BindingResolutionException
      * @throws EntryNotFoundException
      * @throws NotInstantiableException
      * @throws \ReflectionException
      */
-    public function bind(string $abstract, $concrete = null, $shared = false)
+    public function bind(string $abstract, $concrete = null, int $shared = self::SHARED_PROTOTYPE)
     {
         unset($this->instances[$abstract], $this->aliases[$abstract]);
 
@@ -346,23 +306,17 @@ class Container implements ContainerInterface
             $concrete = $abstract;
         }
 
-        if (! ($concrete instanceof Closure)) {
+        if (!($concrete instanceof Closure)) {
             $concrete = function (Container $container, $parameters = []) use ($abstract, $concrete) {
                 if ($abstract == $concrete) {
                     return $container->build($concrete);
                 }
 
-                return $container->resolve(
-                    $concrete, $parameters, $raiseEvents = false
-                );
+                return $container->resolve($concrete, $parameters);
             };
         }
 
         $this->bindings[$abstract] = compact('concrete', 'shared');
-
-        if ($this->resolved($abstract)) {
-            $this->rebound($abstract);
-        }
     }
 
     /**
@@ -370,16 +324,16 @@ class Container implements ContainerInterface
      *
      * @param string $abstract
      * @param null $concrete
-     * @param bool $shared
+     * @param int $shared
      *
      * @throws BindingResolutionException
      * @throws EntryNotFoundException
      * @throws NotInstantiableException
      * @throws \ReflectionException
      */
-    public function bindIf($abstract, $concrete = null, $shared = false)
+    public function bindIf($abstract, $concrete = null, int $shared = self::SHARED_PROTOTYPE)
     {
-        if (! $this->bound($abstract)) {
+        if (!$this->bound($abstract)) {
             $this->bind($abstract, $concrete, $shared);
         }
     }
@@ -389,7 +343,6 @@ class Container implements ContainerInterface
      *
      * @param callable|string $callback
      * @param array $parameters
-     * @param null $defaultMethod
      *
      * @return mixed
      *
@@ -398,9 +351,9 @@ class Container implements ContainerInterface
      * @throws NotInstantiableException
      * @throws \ReflectionException
      */
-    public function call($callback, array $parameters = [], $defaultMethod = null)
+    public function call($callback, array $parameters = [])
     {
-        return BoundMethod::call($this, $callback, $parameters, $defaultMethod);
+        return BoundMethod::call($this, $callback, $parameters);
     }
 
     /**
@@ -409,10 +362,10 @@ class Container implements ContainerInterface
     public function flush()
     {
         $this->aliases = [];
-        $this->resolved = [];
         $this->bindings = [];
         $this->instances = [];
         $this->abstractAliases = [];
+        $this->prototype = [];
     }
 
     /**
@@ -428,7 +381,25 @@ class Container implements ContainerInterface
      */
     public function singleton(string $abstract, $concrete = null)
     {
-        $this->bind($abstract, $concrete, true);
+        $this->bind($abstract, $concrete, self::SHARED_SINGLETON);
+    }
+
+    /**
+     * 向容器中注册一个服务或绑定一个抽象(请求单例模式)
+     *
+     * @param string $abstract
+     * @param null $concrete
+     *
+     * @return mixed|void
+     *
+     * @throws BindingResolutionException
+     * @throws EntryNotFoundException
+     * @throws NotInstantiableException
+     * @throws \ReflectionException
+     */
+    public function requestSingleton(string $abstract, $concrete = null)
+    {
+        $this->bind($abstract, $concrete, self::SHARED_REQUEST);
     }
 
     /**
@@ -442,7 +413,7 @@ class Container implements ContainerInterface
 
         if ($concrete == null) {
             $concrete = [];
-        } elseif (! is_array($concrete)) {
+        } elseif (!is_array($concrete)) {
             $concrete = [$concrete];
         }
 
@@ -455,6 +426,7 @@ class Container implements ContainerInterface
 
     /**
      * 扩展容器中的抽象
+     *
      * @param $abstract
      * @param Closure $closure
      *
@@ -468,77 +440,8 @@ class Container implements ContainerInterface
         $abstract = $this->getAlias($abstract);
         if (isset($this->instances[$abstract])) {
             $this->instances[$abstract] = $closure($this->instances[$abstract], $this);
-
-            $this->rebound($abstract);
         } else {
             $this->extenders[$abstract][] = $closure;
-
-            if ($this->resolved($abstract)) {
-                $this->rebound($abstract);
-            }
-        }
-    }
-
-    /**
-     * hasMethodBinding
-     *
-     * @param $method
-     *
-     * @return bool
-     */
-    public function hasMethodBinding($method)
-    {
-        return isset($this->methodBindings[$method]);
-    }
-
-    /**
-     * callMethodBinding
-     *
-     * @param $method
-     * @param $instance
-     *
-     * @return mixed
-     */
-    public function callMethodBinding($method, $instance)
-    {
-        return call_user_func($this->methodBindings[$method], $instance, $this);
-    }
-
-    /**
-     * @param string $abstract
-     * @param Closure|null $callback
-     *
-     * @return mixed|void
-     */
-    public function resolving($abstract, Closure $callback = null)
-    {
-        if (is_string($abstract)) {
-            $abstract = $this->getAlias($abstract);
-        }
-
-        if (is_null($callback) && $abstract instanceof Closure) {
-            $this->globalResolvingCallbacks[] = $abstract;
-        } else {
-            $this->resolvingCallbacks[$abstract][] = $callback;
-        }
-    }
-
-    /**
-     * @param string $abstract
-     * @param Closure|null $callback
-     *
-     * @return mixed|void
-     */
-    public function afterResolving($abstract, Closure $callback = null)
-    {
-        if (is_string($abstract)) {
-            $abstract = $this->getAlias($abstract);
-        }
-
-        if ($abstract instanceof Closure && is_null($callback)) {
-            $this->globalAfterResolvingCallbacks[] = $abstract;
-        } else {
-            $this->afterResolvingCallbacks[$abstract][] = $callback;
         }
     }
 
@@ -563,7 +466,7 @@ class Container implements ContainerInterface
         $reflector = new ReflectionClass($concrete);
 
         // 判断是否能够实例化，如不能则抛出异常
-        if (! $reflector->isInstantiable()) {
+        if (!$reflector->isInstantiable()) {
             return $this->notInstantiable($concrete);
         }
 
@@ -609,7 +512,7 @@ class Container implements ContainerInterface
      */
     protected function notInstantiable($concrete)
     {
-        if (! empty($this->buildStack)) {
+        if (!empty($this->buildStack)) {
             $previous = implode(', ', $this->buildStack);
             $message = "Target [$concrete] is not instantiable while building [$previous].";
         } else {
@@ -624,7 +527,6 @@ class Container implements ContainerInterface
      *
      * @param string $abstract
      * @param array $parameters
-     * @param bool $raiseEvents
      *
      * @return mixed|object
      *
@@ -633,15 +535,22 @@ class Container implements ContainerInterface
      * @throws NotInstantiableException
      * @throws \ReflectionException
      */
-    protected function resolve(string $abstract, $parameters = [], $raiseEvents = true)
+    protected function resolve(string $abstract, $parameters = [])
     {
         $abstract = $this->getAlias($abstract);
 
         $noNeedsContextualBuild = empty($parameters) || $this->getContextualConcrete($abstract) === null;
 
-        // 判断当前抽象是否为单例，如果为单例则每次只返回同一个对象
         if (isset($this->instances[$abstract]) && $noNeedsContextualBuild) {
             return $this->instances[$abstract];
+        }
+
+        if (isset($this->requestInstances[$abstract]) && $noNeedsContextualBuild) {
+            return $this->requestInstances[$abstract];
+        }
+
+        if (isset($this->prototype[$abstract]) && $noNeedsContextualBuild) {
+            return clone $this->prototype[$abstract];
         }
 
         $this->with[] = $parameters;
@@ -658,17 +567,18 @@ class Container implements ContainerInterface
             $object = $extender($object, $this);
         }
 
-        // 判断正在构建的对象是否为单例模式，如果是则将对象保存
-        if ($this->isShared($abstract) && $noNeedsContextualBuild) {
+        if ($this->isSingleton($abstract) && $noNeedsContextualBuild) {
             $this->instances[$abstract] = $object;
         }
 
-        if ($raiseEvents) {
-            $this->fireResolvingCallbacks($abstract, $object);
+        if ($this->isRequestSingleton($abstract) && $noNeedsContextualBuild) {
+            $this->requestInstances = $object;
         }
 
-        // 保存解析状态
-        $this->resolved[$abstract] = true;
+        if ($this->isPrototype($abstract) && $noNeedsContextualBuild) {
+            $this->prototype[$abstract] = $object;
+        }
+
         array_pop($this->with);
 
         return $object;
@@ -732,7 +642,7 @@ class Container implements ContainerInterface
     /**
      * 获取依赖的特定参数值
      *
-     * @param \ReflectionParameter  $dependency
+     * @param \ReflectionParameter $dependency
      *
      * @return mixed
      */
@@ -753,7 +663,7 @@ class Container implements ContainerInterface
      */
     protected function resolvePrimitive(ReflectionParameter $parameter)
     {
-        if (! is_null($concrete = $this->getContextualConcrete('$'.$parameter->name))) {
+        if (!is_null($concrete = $this->getContextualConcrete('$' . $parameter->name))) {
             return $concrete instanceof Closure ? $concrete($this) : $concrete;
         }
 
@@ -816,7 +726,7 @@ class Container implements ContainerInterface
      */
     protected function getContextualConcrete($abstract)
     {
-        if (! is_null($binding = $this->findInContextualBindings($abstract))) {
+        if (!is_null($binding = $this->findInContextualBindings($abstract))) {
             return $binding;
         }
 
@@ -825,7 +735,7 @@ class Container implements ContainerInterface
         }
 
         foreach ($this->abstractAliases[$abstract] as $alias) {
-            if (! is_null($binding = $this->findInContextualBindings($alias))) {
+            if (!is_null($binding = $this->findInContextualBindings($alias))) {
                 return $binding;
             }
         }
@@ -854,7 +764,7 @@ class Container implements ContainerInterface
      */
     protected function getConcrete($abstract)
     {
-        if (! is_null($concrete = $this->getContextualConcrete($abstract))) {
+        if (!is_null($concrete = $this->getContextualConcrete($abstract))) {
             return $concrete;
         }
 
@@ -896,68 +806,4 @@ class Container implements ContainerInterface
         return [];
     }
 
-    /**
-     * 触发所有解析回调
-     *
-     * @param $abstract
-     * @param $object
-     */
-    protected function fireResolvingCallbacks($abstract, $object)
-    {
-        $this->fireCallbackArray($object, $this->globalResolvingCallbacks);
-
-        $this->fireCallbackArray(
-            $object, $this->getCallbacksForType($abstract, $object, $this->resolvingCallbacks)
-        );
-
-        $this->fireAfterResolvingCallbacks($abstract, $object);
-    }
-
-    /**
-     * 调用一个对象触发回调数组
-     *
-     * @param $object
-     * @param array $callbacks
-     */
-    protected function fireCallbackArray($object, array $callbacks)
-    {
-        foreach ($callbacks as $callback) {
-            $callback($object, $this);
-        }
-    }
-
-    /**
-     * 获取给定类型的所有回调
-     *
-     * @param $abstract
-     * @param $object
-     * @param array $callbacksPerType
-     *
-     * @return array
-     */
-    protected function getCallbacksForType($abstract, $object, array $callbacksPerType)
-    {
-        $results = [];
-        foreach ($callbacksPerType as $type => $callbacks) {
-            if ($type === $abstract || $object instanceof $type) {
-                $results = array_merge($results, $callbacks);
-            }
-        }
-        return $results;
-    }
-
-    /**
-     * 触发所有解析后置回调
-     *
-     * @param $abstract
-     * @param $object
-     */
-    protected function fireAfterResolvingCallbacks($abstract, $object)
-    {
-        $this->fireCallbackArray($object, $this->globalAfterResolvingCallbacks);
-
-        $this->fireCallbackArray(
-            $object, $this->getCallbacksForType($abstract, $object, $this->afterResolvingCallbacks)
-        );
-    }
 }

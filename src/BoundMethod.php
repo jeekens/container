@@ -2,13 +2,11 @@
 
 namespace Jeekens\Container;
 
-use Closure;
 use Jeekens\Container\Exception\BindingResolutionException;
 use Jeekens\Container\Exception\EntryNotFoundException;
 use Jeekens\Container\Exception\NotInstantiableException;
 use ReflectionMethod;
 use ReflectionFunction;
-use InvalidArgumentException;
 
 /**
  * Class BoundMethod
@@ -32,93 +30,33 @@ class BoundMethod
      * @throws NotInstantiableException
      * @throws \ReflectionException
      */
-    public static function call(Container $container, $callback, array $parameters = [], $defaultMethod = null)
+    public static function call(Container $container, $callback, array $parameters = [])
     {
-        if (static::isCallableWithAtSign($callback) || $defaultMethod) {
-            return static::callClass($container, $callback, $parameters, $defaultMethod);
+        if (static::isClassNameWithNonStaticMethod($callback)) {
+            $callback[0] = $container->make($callback[0]);
         }
 
-        return static::callBoundMethod($container, $callback, function () use ($container, $callback, $parameters) {
-            return call_user_func_array(
-                $callback, static::getMethodDependencies($container, $callback, $parameters)
-            );
-        });
-    }
-
-    /**
-     * callClass
-     *
-     * @param Container $container
-     * @param $target
-     * @param array $parameters
-     * @param null $defaultMethod
-     *
-     * @return mixed
-     *
-     * @throws BindingResolutionException
-     * @throws EntryNotFoundException
-     * @throws NotInstantiableException
-     * @throws \ReflectionException
-     */
-    protected static function callClass(Container $container, $target, array $parameters = [], $defaultMethod = null)
-    {
-        $segments = explode('@', $target);
-
-        // We will assume an @ sign is used to delimit the class name from the method
-        // name. We will split on this @ sign and then build a callable array that
-        // we can pass right back into the "call" method for dependency binding.
-        $method = count($segments) === 2
-            ? $segments[1] : $defaultMethod;
-
-        if (is_null($method)) {
-            throw new InvalidArgumentException('Method not provided.');
-        }
-
-        return static::call(
-            $container, [$container->make($segments[0]), $method], $parameters
+        return call_user_func_array(
+            $callback, static::getMethodDependencies($container, $callback, $parameters)
         );
     }
 
     /**
-     * callBoundMethod
+     * @param callable $caller
      *
-     * @param Container $container
-     * @param $callback
-     * @param $default
+     * @return bool
      *
-     * @return mixed
+     * @throws \ReflectionException
      */
-    protected static function callBoundMethod(Container $container, $callback, $default)
+    public static function isClassNameWithNonStaticMethod(callable $caller) : bool
     {
-        if (! is_array($callback)) {
-            return $default instanceof Closure ? $default() : $default;
+        if (is_array($caller) && is_string($caller[0])) {
+            $ref = new ReflectionMethod($caller[0], $caller[1]);
+            return ! $ref->isStatic();
         }
-
-        // Here we need to turn the array callable into a Class@method string we can use to
-        // examine the container and see if there are any method bindings for this given
-        // method. If there are, we can call this method binding callback immediately.
-        $method = static::normalizeMethod($callback);
-
-        if ($container->hasMethodBinding($method)) {
-            return $container->callMethodBinding($method, $callback[0]);
-        }
-
-        return $default instanceof Closure ? $default() : $default;
+        return false;
     }
 
-    /**
-     * Normalize the given callback into a Class@method string.
-     *
-     * @param  callable  $callback
-     *
-     * @return string
-     */
-    protected static function normalizeMethod($callback)
-    {
-        $class = is_string($callback[0]) ? $callback[0] : get_class($callback[0]);
-
-        return "{$class}@{$callback[1]}";
-    }
 
     /**
      * getMethodDependencies
@@ -196,15 +134,4 @@ class BoundMethod
         }
     }
 
-    /**
-     * Determine if the given string is in Class@method syntax.
-     *
-     * @param  mixed  $callback
-     *
-     * @return bool
-     */
-    protected static function isCallableWithAtSign($callback)
-    {
-        return is_string($callback) && strpos($callback, '@') !== false;
-    }
 }
